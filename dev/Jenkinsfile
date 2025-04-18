@@ -1,13 +1,12 @@
 def runDevPipeline() {
     node {
         try {
-            environment {
-                NAMESPACE = "dev"
-                DOCKER_REGISTRY = 'csc11007'
-                APP_NAME = "petclinic-${NAMESPACE}"
-                GITOPS_REPO = "https://github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git"
-                VALUES_FILE = "charts/dev/values.yaml"
-            }
+            // Khai báo biến môi trường trực tiếp trong hàm để đảm bảo scope
+            def NAMESPACE = "dev"
+            def DOCKER_REGISTRY = 'csc11007'
+            def APP_NAME = "petclinic-${NAMESPACE}"
+            def GITOPS_REPO = "https://github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git"
+            def VALUES_FILE = "charts/dev/values.yaml"
 
             stage('Checkout source code repository') {
                 checkout([$class: 'GitSCM',
@@ -33,28 +32,21 @@ def runDevPipeline() {
                     'admin-server': '9090'
                 ]
 
-                withCredentials([usernamePassword(
-                    credentialsId: 'csc11007',
-                    usernameVariable: 'DOCKERHUB_USER',
-                    passwordVariable: 'DOCKERHUB_PASSWORD'
-                )]) {
-                    sh "echo ${DOCKERHUB_PASSWORD} | docker login -u ${DOCKERHUB_USER} --password-stdin"
+                // Sử dụng docker.withRegistry để đăng nhập Docker Hub
+                docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
+                    serviceMap.each { service, port ->
+                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${service}:dev-${env.COMMIT}"
+                        echo "Building Docker image for ${service} → ${imageName}"
+
+                        sh """
+                            docker build \
+                              --build-arg SERVICE_NAME=${service} \
+                              --build-arg EXPOSED_PORT=${port} \
+                              -t ${imageName} .
+                        """
+                        sh "docker push ${imageName}"
+                    }
                 }
-
-                serviceMap.each { service, port ->
-                    def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${service}:dev-${env.COMMIT}"
-                    echo "Building Docker image for ${service} → ${imageName}"
-
-                    sh """
-                        docker build \
-                          --build-arg SERVICE_NAME=${service} \
-                          --build-arg EXPOSED_PORT=${port} \
-                          -t ${imageName} .
-                    """
-                    sh "docker push ${imageName}"
-                }
-
-                sh "docker logout"
             }
 
             stage('Checkout GitOps configuration repository') {
@@ -118,6 +110,9 @@ def runDevPipeline() {
                     }
                 }
             }
+        } catch (Exception e) {
+            echo "Error in dev pipeline: ${e.message}"
+            throw e // Ném lỗi để pipeline đánh dấu thất bại
         } finally {
             cleanWs()
             echo "Dev pipeline completed"
