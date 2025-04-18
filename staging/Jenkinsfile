@@ -15,10 +15,21 @@ def runStagingPipeline() {
             }
 
             stage('Checkout source code repository') {
-                checkout([$class: 'GitSCM',
-                    branches: [[name: "refs/tags/${env.TAG_NAME}"]],
-                    userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git', credentialsId: 'github-token']]
-                ])
+                steps {
+                    script {
+                        withCredentials([usernamePassword(  
+                            credentialsId: 'github-token', 
+                            usernameVariable: 'GIT_USERNAME', 
+                            passwordVariable: 'GIT_PASSWORD'
+                            )]) {
+                            def GIT_TAG = params.tag_name?.trim()
+                            checkout([$class: 'GitSCM', 
+                                branches: [[name: "refs/tags/${GIT_TAG}"]], 
+                                userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git']]
+                            ])
+                        }
+                    }
+                }
             }
 
             stage('Build & Push docker images') {
