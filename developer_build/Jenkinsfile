@@ -42,29 +42,47 @@ def runDeveloperBuildPipeline() {
             }
 
             stage('Create namespace') {
-                sh "kubectl create namespace ${NAMESPACE}"
-                echo "Created namespace: ${NAMESPACE}"
+                steps {
+                    withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
+                        sh "kubectl create namespace ${NAMESPACE}"
+                        echo "Created namespace: ${NAMESPACE}"
+                    }
+                }
             }
 
             stage('Update helm values') {
-                sh "sed -i 's/^namespace:.*/namespace: ${NAMESPACE}/' ./charts/preview/values.yaml"
-                sh "sed -i '/api-gateway:/,/host:/ s/host:.*/host: petclinic-${NAMESPACE}.tech/' ./charts/preview/values.yaml"
-                echo "Domain: petclinic-${NAMESPACE}.tech:30213"
+                steps {
+                    script {
+                        withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
+                            sh "sed -i 's/^namespace:.*/namespace: ${NAMESPACE}/' ./charts/preview/values.yaml"
+
+                            sh "sed -i '/api-gateway:/,/host:/ s/host:.*/host: petclinic-${NAMESPACE}.com/' ./charts/preview/values.yaml"
+
+                            echo "Domain: petclinic-${NAMESPACE}.com:30213"
+                        }
+                    }
+                }
             }
 
             stage('Deploy services') {
-                sh """
-                    helm upgrade --install petclinic ./charts/preview -n ${NAMESPACE} --create-namespace \\
-                        --set namespace=${NAMESPACE} \\
-                        --set services.api-gateway.commit=${API_GATEWAY_TAG} \\
-                        --set services.customers-service.commit=${CUSTOMERS_SERVICE_TAG} \\
-                        --set services.vets-service.commit=${VETS_SERVICE_TAG} \\
-                        --set services.visits-service.commit=${VISITS_SERVICE_TAG} \\
-                        --set services.admin-server.commit=${ADMIN_SERVER_TAG} \\
-                        --set services.discovery-server.commit=${DISCOVERY_SERVER_TAG} \\
-                        --set services.config-server.commit=${CONFIG_SERVER_TAG} \\
-                        --set services.genai-service.commit=${GENAI_SERVICE_TAG}
-                """
+                steps {
+                    script {
+                        withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
+                            sh """
+                            helm upgrade --install petclinic ./charts/preview -n ${NAMESPACE} --create-namespace \\
+                            --set namespace=${NAMESPACE} \\
+                            --set services.api-gateway.commit=${API_GATEWAY_TAG} \\
+                            --set services.customers-service.commit=${CUSTOMERS_SERVICE_TAG} \\
+                            --set services.vets-service.commit=${VETS_SERVICE_TAG} \\
+                            --set services.visits-service.commit=${VISITS_SERVICE_TAG} \\
+                            --set services.admin-server.commit=${ADMIN_SERVER_TAG} \\
+                            --set services.discovery-server.commit=${DISCOVERY_SERVER_TAG} \\
+                            --set services.config-server.commit=${CONFIG_SERVER_TAG} \\
+                                --set services.genai-service.commit=${GENAI_SERVICE_TAG}
+                            """
+                        }
+                    }
+                }
             }
 
             stage('Show delete link') {
