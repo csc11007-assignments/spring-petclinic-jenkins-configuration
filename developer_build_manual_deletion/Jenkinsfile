@@ -1,42 +1,94 @@
-pipeline {
-    agent any
-    
-    parameters {
-        string(name: 'BUILD_NUMBER_TO_DELETE', defaultValue: '', description: 'Build number to delete deployment namespace')
-    }
+def runDeveloperBuildDeletionPipeline() {
+    node {
+        try {
+            parameters {
+                string(name: 'api_gateway', defaultValue: 'main', description: '')
+                string(name: 'customers_service', defaultValue: 'main', description: '')
+                string(name: 'vets_service', defaultValue: 'main', description: '')
+                string(name: 'visits_service', defaultValue: 'main', description: '')
+                string(name: 'admin_server', defaultValue: 'main', description: '')
+                string(name: 'discovery_server', defaultValue: 'main', description: '')
+                string(name: 'config_server', defaultValue: 'main', description: '')
+                string(name: 'genai_service', defaultValue: 'main', description: '')
+            }
 
-    environment {
-        NAMESPACE = "developer_build-${params.BUILD_NUMBER_TO_DELETE}"
-    }
+            environment {
+                NAMESPACE = "developer_build-${env.BUILD_NUMBER}"
+                DOCKER_REGISTRY = 'csc11007'
+            }
 
-    stages {
-        stage('Validate input') {
-            steps {
-                script {
-                    if (!params.BUILD_NUMBER_TO_DELETE?.trim()) {
-                        error("BUILD_NUMBER_TO_DELETE is required!")
-                    }
+            stage('Checkout repository') {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'GIT_USERNAME',
+                    passwordVariable: 'GIT_PASSWORD'
+                )]) {
+                    git(
+                        branch: 'main',
+                        credentialsId: 'github-token',
+                        url: 'https://github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git'
+                    )
                 }
             }
-        }
 
-        stage('Check namespace') {
-            steps {
-                script {
-                    def nsExists = sh(script: "kubectl get namespace ${NAMESPACE} --no-headers || true", returnStdout: true).trim()
-                    if (nsExists) {
-                        echo "Namespace ${NAMESPACE} exists. Proceeding with deletion."
-                    } else {
-                        error "Namespace ${NAMESPACE} does not exist."
-                    }
-                }
+            stage('Get commit IDs') {
+                env.API_GATEWAY_TAG = getCommitId('spring-petclinic-api-gateway', params.api_gateway)
+                env.CUSTOMERS_SERVICE_TAG = getCommitId('spring-petclinic-customers-service', params.customers_service)
+                env.VETS_SERVICE_TAG = getCommitId('spring-petclinic-vets-service', params.vets_service)
+                env.VISITS_SERVICE_TAG = getCommitId('spring-petclinic-visits-service', params.visits_service)
+                env.ADMIN_SERVER_TAG = getCommitId('spring-petclinic-admin-server', params.admin_server)
+                env.DISCOVERY_SERVER_TAG = getCommitId('spring-petclinic-discovery-server', params.discovery_server)
+                env.CONFIG_SERVER_TAG = getCommitId('spring-petclinic-config-server', params.config_server)
+                env.GENAI_SERVICE_TAG = getCommitId('spring-petclinic-genai-service', params.genai_service)
             }
-        }
 
-        stage('Delete namespace') {
-            steps {
-                sh "kubectl delete namespace ${NAMESPACE}"
+            stage('Create namespace') {
+                sh "kubectl create namespace ${NAMESPACE}"
+                echo "Created namespace: ${NAMESPACE}"
             }
+
+            stage('Update helm values') {
+                sh "sed -i 's/^namespace:.*/namespace: ${NAMESPACE}/' ./charts/preview/values.yaml"
+                sh "sed -i '/api-gateway:/,/host:/ s/host:.*/host: petclinic-${NAMESPACE}.tech/' ./charts/preview/values.yaml"
+                echo "Domain: petclinic-${NAMESPACE}.tech:30213"
+            }
+
+            stage('Deploy services') {
+                sh """
+                    helm upgrade --install petclinic ./charts/preview -n ${NAMESPACE} --create-namespace \\
+                        --set namespace=${NAMESPACE} \\
+                        --set services.api-gateway.commit=${API_GATEWAY_TAG} \\
+                        --set services.customers-service.commit=${CUSTOMERS_SERVICE_TAG} \\
+                        --set services.vets-service.commit=${VETS_SERVICE_TAG} \\
+                        --set services.visits-service.commit=${VISITS_SERVICE_TAG} \\
+                        --set services.admin-server.commit=${ADMIN_SERVER_TAG} \\
+                        --set services.discovery-server.commit=${DISCOVERY_SERVER_TAG} \\
+                        --set services.config-server.commit=${CONFIG_SERVER_TAG} \\
+                        --set services.genai-service.commit=${GENAI_SERVICE_TAG}
+                """
+            }
+
+            stage('Delete deployment') {
+                sh "kubectl delete namespace ${NAMESPACE} || true"
+                echo "Deleted namespace: ${NAMESPACE}"
+            }
+        } finally {
+            cleanWs()
+            echo "Developer build deletion pipeline completed"
         }
     }
 }
+
+def getCommitId(serviceName, branch) {
+    def cleanBranch = branch.trim()
+    def commitId = sh(
+        script: "git ls-remote https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git refs/heads/${cleanBranch} | cut -f 1 | head -n 1",
+        returnStdout: true
+    ).trim().take(7)
+
+    def tag = cleanBranch == "main" ? "main" : "${cleanBranch}-${commitId}"
+    echo "Service: ${serviceName}, Branch: ${cleanBranch}, Commit ID: ${commitId}, Tag: ${tag}"
+    return tag
+}
+
+return this
