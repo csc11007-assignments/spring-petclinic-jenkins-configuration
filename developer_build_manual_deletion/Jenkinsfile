@@ -1,6 +1,10 @@
 def runDeveloperBuildDeletionPipeline() {
     node {
         try {
+            // Khai báo biến trực tiếp
+            def NAMESPACE = "developer_build-${env.BUILD_NUMBER}"
+            def DOCKER_REGISTRY = 'csc11007'
+
             parameters {
                 string(name: 'api_gateway', defaultValue: 'main', description: '')
                 string(name: 'customers_service', defaultValue: 'main', description: '')
@@ -10,11 +14,6 @@ def runDeveloperBuildDeletionPipeline() {
                 string(name: 'discovery_server', defaultValue: 'main', description: '')
                 string(name: 'config_server', defaultValue: 'main', description: '')
                 string(name: 'genai_service', defaultValue: 'main', description: '')
-            }
-
-            environment {
-                NAMESPACE = "developer_build-${env.BUILD_NUMBER}"
-                DOCKER_REGISTRY = 'csc11007'
             }
 
             stage('Checkout repository') {
@@ -72,6 +71,9 @@ def runDeveloperBuildDeletionPipeline() {
                 sh "kubectl delete namespace ${NAMESPACE} || true"
                 echo "Deleted namespace: ${NAMESPACE}"
             }
+        } catch (Exception e) {
+            echo "Error in developer build deletion pipeline: ${e.message}"
+            throw e
         } finally {
             cleanWs()
             echo "Developer build deletion pipeline completed"
