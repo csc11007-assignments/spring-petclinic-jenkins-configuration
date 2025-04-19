@@ -150,7 +150,7 @@ def runStagingPipeline() {
                     )]) {
                         sh """
                             git add ${VALUES_FILE}
-                            git commit -m "Update image tags for services to ${tag}" || echo "No changes to commit"
+                            git commit -m "Update image tags for services [${SERVICES_CHANGED}] to ${tag} in ${VALUES_FILE}" || echo "No changes to commit"
                             git push origin main
                         """
                     }
