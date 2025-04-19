@@ -1,167 +1,123 @@
-pipeline {
-    agent any
+def runFeaturePipeline() {
+    node {
+        try {
+            def NAMESPACE = "feature"
+            def DOCKER_REGISTRY = 'csc11007'
+            def APP_NAME = "petclinic-${NAMESPACE}"
+            def SERVICES_CHANGED = ""
 
-    environment {
-        TAG_NAME = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7)}"
-        DOCKER_REGISTRY = 'csc11007'
-        BRANCH_NAME = "${env.BRANCH_NAME}"
-        COMMIT_ID = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-    }
-
-    // just apply to feature branches
-    when { 
-        not {
-            branch 'dev'
-        }
-        not {
-            branch 'main'
-        }
-    }
-    
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
+            stage('Checkout Source Code Repository') {
+                checkout([$class: 'GitSCM',
+                    branches: [[name: env.BRANCH_NAME]],
+                    userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git', credentialsId: 'github-token']]
+                ])
             }
-        }
 
-        stage('Identify Changed Services') {
-            steps {
+            stage('Detect Changed Services') {
                 script {
-                    def changedFiles = sh(script: "git diff --name-only ${env.GIT_COMMIT}^ ${env.GIT_COMMIT}", returnStdout: true)
-                    def services = []
-                    changedFiles.split('\n').each { file ->
-                        def parts = file.split('/')
-                        if (parts.size() > 0 && parts[0].startsWith("spring-petclinic-")) {
-                            services.add(parts[0].replace("spring-petclinic-", ""))
-                        }
+                    sh "git fetch origin ${env.BRANCH_NAME} --prune --depth=2 || git fetch origin ${env.BRANCH_NAME} --prune --unshallow"
+
+                    def baseCommit
+                    try {
+                        baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
+                    } catch (Exception e) {
+                        echo "No previous commit found. Treating as first commit."
+                        SERVICES_CHANGED = [
+                            "spring-petclinic-admin-server",
+                            "spring-petclinic-api-gateway",
+                            "spring-petclinic-config-server",
+                            "spring-petclinic-customers-service",
+                            "spring-petclinic-discovery-server",
+                            "spring-petclinic-genai-service",
+                            "spring-petclinic-vets-service",
+                            "spring-petclinic-visits-service"
+                        ].join(',')
                     }
-                    services = services.unique()
-                    echo "Services with changes: ${services.join(', ')}"
-                    env.CHANGED_SERVICES = services.join(',')
-                }
-            }
-        }
 
-        // stage('Test & coverage') {
-        //     when {
-        //         expression { env.CHANGED_SERVICES != '' }
-        //     }
-        //     steps {
-        //         script {
-        //             def services = env.CHANGED_SERVICES.split(',')
-        //             services.each { service ->
-        //                 echo "Running tests for service: ${service}"
-        //                 dir("spring-petclinic-${service}") {
-        //                     sh "mvn clean test jacoco:report"
-        //                     def zipName = "${service}-test-results-${env.TAG_NAME}.zip"
-        //                     sh "zip -r ${zipName} target/surefire-reports/ target/site/jacoco/"
-        //                     archiveArtifacts artifacts: "${zipName}", allowEmptyArchive: false
+                    if (!SERVICES_CHANGED) {
+                        def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
+                        echo "Raw changed files:\n${changes}"
 
-        //                     if (!fileExists("target/site/jacoco/jacoco.xml")) {
-        //                         error("JaCoCo report not found!")
-        //                     }
+                        def changedFiles = changes ? changes.split("\n") : []
+                        def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
 
-        //                     def xml = readFile("target/site/jacoco/jacoco.xml")
-        //                     def totalMissed = 0.0, totalCovered = 0.0
-        //                     def matches = (xml =~ /<counter type="INSTRUCTION" missed="([^"]*)" covered="([^"]*)"/)
-        //                     matches.each { m ->
-        //                         totalMissed += m[1].toFloat()
-        //                         totalCovered += m[2].toFloat()
-        //                     }
+                        def services = [
+                            "spring-petclinic-admin-server",
+                            "spring-petclinic-api-gateway",
+                            "spring-petclinic-config-server",
+                            "spring-petclinic-customers-service",
+                            "spring-petclinic-discovery-server",
+                            "spring-petclinic-genai-service",
+                            "spring-petclinic-vets-service",
+                            "spring-petclinic-visits-service"
+                        ]
 
-        //                     def coverage = totalCovered / (totalCovered + totalMissed)
-        //                     if (coverage < 0.7) {
-        //                         error("Coverage too low: ${(coverage*100).round(2)}%")
-        //                     }
-        //                     echo "Coverage OK: ${(coverage*100).round(2)}%"
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-
-        stage('Build artifacts') {
-            when {
-                expression { env.CHANGED_SERVICES != '' }
-            }
-            steps {
-                script {
-                    def services = env.CHANGED_SERVICES.split(',')
-                    services.each { service ->
-                        echo "Packaging service: ${service}"
-                        dir("spring-petclinic-${service}") {
-                            sh "mvn clean package -DskipTests"
-                            def jarName = "spring-petclinic-${service}-${env.TAG_NAME}.jar"
-                            sh "mv target/spring-petclinic-${service}-*.jar target/${jarName}"
-                            archiveArtifacts artifacts: "target/${jarName}", allowEmptyArchive: false
+                        def changedServices = services.findAll { service ->
+                            normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
                         }
+
+                        SERVICES_CHANGED = changedServices.join(',')
+                        echo "Changed services: ${SERVICES_CHANGED}"
+                    }
+
+                    if (!SERVICES_CHANGED) {
+                        echo "No services changed. Skipping build."
+                        currentBuild.result = 'SUCCESS'
+                        return
                     }
                 }
             }
-        }
 
-        stage('Build & Push Docker images') {
-            when {
-                expression { env.CHANGED_SERVICES != '' }
+            stage('Get Commit Hash and Branch Name') {
+                env.COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                env.BRANCH_TAG = env.BRANCH_NAME.replaceAll("[^a-zA-Z0-9-]", "-").toLowerCase()
+                env.TAG = "${env.BRANCH_TAG}-${env.COMMIT}"
+                echo "Branch: ${env.BRANCH_NAME}, Commit: ${env.COMMIT}, Tag: ${env.TAG}"
             }
-            steps {
+
+            stage('Build & Push Docker Images') {
                 script {
+                    def servicesList = SERVICES_CHANGED.tokenize(',')
                     def serviceMap = [
-                        'config-server': '8888',
-                        'discovery-server': '8761',
-                        'customers-service': '8081',
-                        'visits-service': '8082',
-                        'vets-service': '8083',
-                        'genai-service': '8084',
-                        'api-gateway': '8080',
-                        'admin-server': '9090'
+                        'spring-petclinic-config-server': '8888',
+                        'spring-petclinic-discovery-server': '8761',
+                        'spring-petclinic-customers-service': '8081',
+                        'spring-petclinic-visits-service': '8082',
+                        'spring-petclinic-vets-service': '8083',
+                        'spring-petclinic-genai-service': '8084',
+                        'spring-petclinic-api-gateway': '8080',
+                        'spring-petclinic-admin-server': '9090'
                     ]
 
-                    withCredentials([usernamePassword(
-                        credentialsId: 'csc11007',
-                        usernameVariable: 'DOCKERHUB_USER',
-                        passwordVariable: 'DOCKERHUB_PASSWORD'
-                        )]) {
-                        sh "echo ${DOCKERHUB_PASSWORD} | docker login -u ${DOCKERHUB_USER} --password-stdin"
-                    }
+                    docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
+                        servicesList.each { service ->
+                            def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                            def port = serviceMap[service]
+                            def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.TAG}"
+                            echo "Building Docker image for ${shortServiceName} → ${imageName}"
 
-                    def imageTag = "${env.BRANCH_NAME}-${env.COMMIT_ID}"
-
-                    def services = env.CHANGED_SERVICES.split(',')
-                    services.each { service ->
-                        def serviceName = "spring-petclinic-${service}"
-                        def port = serviceMap[service]
-                        if (!port) {
-                            echo "Skipping unknown service: ${service}"
-                            return
+                            sh """
+                                docker build \
+                                  --build-arg SERVICE_NAME=${service} \
+                                  --build-arg EXPOSED_PORT=${port} \
+                                  -t ${imageName} .
+                                docker push ${imageName}
+                                docker rmi ${imageName} || true
+                                docker system prune -f --volumes
+                                docker builder prune -f
+                            """
                         }
-                        
-                        echo "Building Docker for ${serviceName}"
-                       sh """
-                            docker build \
-                            --build-arg SERVICE_NAME=${serviceName} \
-                            --build-arg SERVICE_PORT=${port} \
-                            -t ${DOCKER_REGISTRY}/${serviceName}:${imageTag} .
-                        """
-                        sh "docker push ${DOCKER_REGISTRY}/${serviceName}:${imageTag}"
                     }
-
-                    sh 'docker logout'
                 }
             }
-        }
-    }
-
-    post {
-        success {
-            echo "Pipeline completed successfully!"
-        }
-        failure {
-            echo "Pipeline failed. Check logs."
-        }
-        always {
-            sh "docker system prune -f"
+        } catch (Exception e) {
+            echo "Error in feature pipeline: ${e.message}"
+            throw e
+        } finally {
+            cleanWs()
+            echo "Feature pipeline completed"
         }
     }
 }
+
+return this
