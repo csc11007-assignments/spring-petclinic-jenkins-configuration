@@ -1,7 +1,6 @@
 def runStagingPipeline() {
     node {
         try {
-            // Declare variables
             def NAMESPACE = "staging"
             def DOCKER_REGISTRY = 'csc11007'
             def APP_NAME = "petclinic-${NAMESPACE}"
@@ -11,101 +10,103 @@ def runStagingPipeline() {
             def SERVICES_CHANGED = ""
             env.TAG = GIT_TAG ?: 'main'
 
-            stage('Checkout source code repository') {
+            stage('Checkout Source Code Repository') {
                 checkout([$class: 'GitSCM',
                     branches: [[name: GIT_TAG ? "refs/tags/${GIT_TAG}" : "refs/heads/main"]],
-                    userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git', credentialsId: 'github-token']]
+                    userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git', credentialsId: 'github-token']],
+                    extensions: [[$class: 'CloneOption', noTags: false, shallow: false, depth: 0]]
                 ])
             }
 
-            stage('Validate tag or detect changes') {
-                if (GIT_TAG) {
-                    echo "Tag build detected: ${GIT_TAG}"
-                    SERVICES_CHANGED = [
-                        "spring-petclinic-config-server",
-                        "spring-petclinic-discovery-server",
-                        "spring-petclinic-customers-service",
-                        "spring-petclinic-visits-service",
-                        "spring-petclinic-vets-service",
-                        "spring-petclinic-genai-service",
-                        "spring-petclinic-api-gateway",
-                        "spring-petclinic-admin-server"
-                    ].join(',')
-                } else {
-                    echo "No tag provided. Detecting changed services for main branch."
-                    def isShallow = sh(script: "git rev-parse --is-shallow-repository", returnStdout: true).trim()
-                    if (isShallow == "true") {
-                        sh 'git fetch origin main --prune --unshallow --tags'
+            stage('Validate Tag or Detect Changes') {
+                script {
+                    if (GIT_TAG) {
+                        echo "Tag build detected: ${GIT_TAG}"
+                        SERVICES_CHANGED = [
+                            "spring-petclinic-config-server",
+                            "spring-petclinic-discovery-server",
+                            "spring-petclinic-customers-service",
+                            "spring-petclinic-visits-service",
+                            "spring-petclinic-vets-service",
+                            "spring-petclinic-genai-service",
+                            "spring-petclinic-api-gateway",
+                            "spring-petclinic-admin-server"
+                        ].join(',')
                     } else {
-                        sh 'git fetch origin main --prune --tags'
+                        echo "No tag provided. Detecting changed services for main branch."
+                        sh "git fetch origin main --prune --depth=10 || git fetch origin main --prune --unshallow"
+
+                        def baseCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
+                        def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
+                        echo "Raw changed files:\n${changes}"
+
+                        def changedFiles = changes ? changes.split("\n") : []
+                        def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
+
+                        def services = [
+                            "spring-petclinic-admin-server",
+                            "spring-petclinic-api-gateway",
+                            "spring-petclinic-config-server",
+                            "spring-petclinic-customers-service",
+                            "spring-petclinic-discovery-server",
+                            "spring-petclinic-genai-service",
+                            "spring-petclinic-vets-service",
+                            "spring-petclinic-visits-service"
+                        ]
+
+                        def changedServices = services.findAll { service ->
+                            normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
+                        }
+
+                        SERVICES_CHANGED = changedServices.join(',')
+                        echo "Changed services: ${SERVICES_CHANGED}"
+
+                        if (!SERVICES_CHANGED) {
+                            echo "No services changed. Skipping build."
+                            currentBuild.result = 'SUCCESS'
+                            return
+                        }
                     }
-                    sh 'git fetch --all --prune --tags'
+                }
+            }
 
-                    def baseCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
-                    def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
-                    echo "Raw changed files:\n${changes}"
-
-                    def changedFiles = changes ? changes.split("\n") : []
-                    def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
-
-                    def services = [
-                        "spring-petclinic-admin-server",
-                        "spring-petclinic-api-gateway",
-                        "spring-petclinic-config-server",
-                        "spring-petclinic-customers-service",
-                        "spring-petclinic-discovery-server",
-                        "spring-petclinic-genai-service",
-                        "spring-petclinic-vets-service",
-                        "spring-petclinic-visits-service"
+            stage('Build & Push Docker Images') {
+                when { expression { SERVICES_CHANGED != "" } }
+                script {
+                    def servicesList = SERVICES_CHANGED.tokenize(',')
+                    def serviceMap = [
+                        'spring-petclinic-config-server': '8888',
+                        'spring-petclinic-discovery-server': '8761',
+                        'spring-petclinic-customers-service': '8081',
+                        'spring-petclinic-visits-service': '8082',
+                        'spring-petclinic-vets-service': '8083',
+                        'spring-petclinic-genai-service': '8084',
+                        'spring-petclinic-api-gateway': '8080',
+                        'spring-petclinic-admin-server': '9090'
                     ]
 
-                    def changedServices = services.findAll { service ->
-                        normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
-                    }
+                    docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
+                        servicesList.each { service ->
+                            def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                            def port = serviceMap[service]
+                            def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.TAG}"
+                            echo "Building Docker image for ${shortServiceName} → ${imageName}"
 
-                    SERVICES_CHANGED = changedServices.join(',')
-                    echo "Changed services: ${SERVICES_CHANGED}"
-
-                    if (!SERVICES_CHANGED) {
-                        echo "No services changed. Skipping build."
-                        return
-                    }
-                }
-            }
-
-            stage('Build & Push docker images') {
-                def servicesList = SERVICES_CHANGED.tokenize(',')
-                def serviceMap = [
-                    'spring-petclinic-config-server': '8888',
-                    'spring-petclinic-discovery-server': '8761',
-                    'spring-petclinic-customers-service': '8081',
-                    'spring-petclinic-visits-service': '8082',
-                    'spring-petclinic-vets-service': '8083',
-                    'spring-petclinic-genai-service': '8084',
-                    'spring-petclinic-api-gateway': '8080',
-                    'spring-petclinic-admin-server': '9090'
-                ]
-
-                docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
-                    servicesList.each { service ->
-                        def shortServiceName = service.replaceFirst("spring-petclinic-", "")
-                        def port = serviceMap[service]
-                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.TAG}"
-                        echo "Building Docker image for ${shortServiceName} → ${imageName}"
-
-                        sh """
-                            docker build \
-                              --build-arg SERVICE_NAME=${service} \
-                              --build-arg EXPOSED_PORT=${port} \
-                              -t ${imageName} .
-                            docker push ${imageName}
-                            docker rmi ${imageName} || true
-                        """
+                            sh """
+                                docker build \
+                                  --build-arg SERVICE_NAME=${service} \
+                                  --build-arg EXPOSED_PORT=${port} \
+                                  -t ${imageName} .
+                                docker push ${imageName}
+                                docker rmi ${imageName} || true
+                            """
+                        }
                     }
                 }
             }
 
-            stage('Checkout GitOps configuration repository') {
+            stage('Checkout GitOps Configuration Repository') {
+                when { expression { SERVICES_CHANGED != "" } }
                 dir('gitops-repo') {
                     withCredentials([usernamePassword(
                         credentialsId: 'github-token',
@@ -122,28 +123,32 @@ def runStagingPipeline() {
                 }
             }
 
-            stage('Update configuration with new image tags') {
+            stage('Update Configuration with New Image Tags') {
+                when { expression { SERVICES_CHANGED != "" } }
                 dir('gitops-repo') {
-                    def servicesList = SERVICES_CHANGED.tokenize(',')
+                    script {
+                        def servicesList = SERVICES_CHANGED.tokenize(',')
 
-                    servicesList.each { service ->
-                        def shortServiceName = service.replaceFirst("spring-petclinic-", "")
-                        sh """
-                            if grep -q "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE}; then
-                                lineNumber=\$(grep -n "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE} | cut -d':' -f1)
-                                if [ ! -z "\$lineNumber" ]; then
-                                    tagLine=\$((lineNumber + 3))
-                                    sed -i "\${tagLine}s/tag: .*/tag: ${env.TAG}/" ${VALUES_FILE}
+                        servicesList.each { service ->
+                            def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                            sh """
+                                if grep -q "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE}; then
+                                    lineNumber=\$(grep -n "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE} | cut -d':' -f1)
+                                    if [ ! -z "\$lineNumber" ]; then
+                                        tagLine=\$((lineNumber + 3))
+                                        sed -i "\${tagLine}s/tag: .*/tag: ${env.TAG}/" ${VALUES_FILE}
+                                    fi
                                 fi
-                            fi
-                        """
-                    }
+                            """
+                        }
 
-                    sh "cat ${VALUES_FILE}"
+                        sh "cat ${VALUES_FILE}"
+                    }
                 }
             }
 
             stage('Commit and Push to GitOps Repository') {
+                when { expression { SERVICES_CHANGED != "" } }
                 dir('gitops-repo') {
                     withCredentials([usernamePassword(
                         credentialsId: 'github-token',
@@ -162,6 +167,7 @@ def runStagingPipeline() {
             echo "Error in staging pipeline: ${e.message}"
             throw e
         } finally {
+            cleanWs()
             echo "Staging pipeline completed"
         }
     }

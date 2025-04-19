@@ -86,6 +86,8 @@ def runDevPipeline() {
                               -t ${imageName} .
                             docker push ${imageName}
                             docker rmi ${imageName} || true
+                            docker system prune -f --volumes
+                            docker builder prune -f
                         """
                     }
                 }
