@@ -82,9 +82,9 @@ def runDevPipeline() {
 
                         sh """
                             docker build \
-                              --build-arg SERVICE_NAME=${shortServiceName} \
-                              --build-arg EXPOSED_PORT=${port} \
-                              -t ${imageName} .
+                            --build-arg SERVICE_NAME=${shortServiceName} \
+                            --build-arg EXPOSED_PORT=${port} \
+                            -t ${imageName} .
                             docker push ${imageName}
                             docker rmi ${imageName} || true
                         """
