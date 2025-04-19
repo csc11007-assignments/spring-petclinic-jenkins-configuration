@@ -9,6 +9,13 @@ def runStagingPipeline() {
             def GIT_TAG = params.tag_name?.trim() ?: env.TAG_NAME?.trim()
             def SERVICES_CHANGED = ""
 
+            stage('Checkout source code repository') {
+                checkout([$class: 'GitSCM',
+                    branches: [[name: GIT_TAG ? "refs/tags/${GIT_TAG}" : "refs/heads/main"]],
+                    userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git', credentialsId: 'github-token']]
+                ])
+            }
+
             stage('Validate tag or detect changes') {
                 if (GIT_TAG) {
                     echo "Tag build detected: ${GIT_TAG}"
@@ -62,13 +69,6 @@ def runStagingPipeline() {
                         return
                     }
                 }
-            }
-
-            stage('Checkout source code repository') {
-                checkout([$class: 'GitSCM',
-                    branches: [[name: GIT_TAG ? "refs/tags/${GIT_TAG}" : "refs/heads/main"]],
-                    userRemoteConfigs: [[url: 'https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git', credentialsId: 'github-token']]
-                ])
             }
 
             stage('Build & Push docker images') {
@@ -160,7 +160,6 @@ def runStagingPipeline() {
             echo "Error in staging pipeline: ${e.message}"
             throw e
         } finally {
-            cleanWs()
             echo "Staging pipeline completed"
         }
     }
