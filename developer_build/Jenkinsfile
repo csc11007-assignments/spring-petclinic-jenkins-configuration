@@ -143,7 +143,7 @@ pipeline {
                     def deletionTimestamp = new Date().getTime() + (HOURS_TO_LIVE * 60 * 60 * 1000)
                     
                     // Schedule the deletion job
-                    build job: 'delete-deployment', 
+                    build job: 'developer_build_manual_deletion', 
                           parameters: [string(name: 'BUILD_NUMBER_TO_DELETE', value: "${env.BUILD_NUMBER}")],
                           quietPeriod: HOURS_TO_LIVE * 60 * 60,
                           wait: false
@@ -160,7 +160,7 @@ pipeline {
                 echo "Main application: http://petclinic-${NAMESPACE}.com"
                 echo "Eureka Dashboard: http://eureka.petclinic-${NAMESPACE}.com"
                 echo "Admin Server: http://admin.petclinic-${NAMESPACE}.com"
-                echo "Delete deployment manually: ${env.JENKINS_URL}job/delete-deployment/buildWithParameters?BUILD_NUMBER_TO_DELETE=${env.BUILD_NUMBER}"
+                echo "Delete deployment manually: ${env.JENKINS_URL}job/developer_build_manual_deletion/buildWithParameters?BUILD_NUMBER_TO_DELETE=${env.BUILD_NUMBER}"
             }
         }
     }
