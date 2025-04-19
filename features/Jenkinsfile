@@ -70,7 +70,7 @@ def runFeaturePipeline() {
 
             stage('Get Commit Hash and Branch Name') {
                 env.COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                env.BRANCH_TAG = env.BRANCH_NAME.replaceAll("[^a-zA-Z0-9-]", "-").toLowerCase()
+                env.BRANCH_TAG = env.BRANCH_NAME
                 env.TAG = "${env.BRANCH_TAG}-${env.COMMIT}"
                 echo "Branch: ${env.BRANCH_NAME}, Commit: ${env.COMMIT}, Tag: ${env.TAG}"
             }
