@@ -1,12 +1,13 @@
 def runDevPipeline() {
     node {
         try {
-            // Khai báo biến môi trường trực tiếp trong hàm để đảm bảo scope
+            // Declare variables
             def NAMESPACE = "dev"
             def DOCKER_REGISTRY = 'csc11007'
             def APP_NAME = "petclinic-${NAMESPACE}"
             def GITOPS_REPO = "https://github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git"
             def VALUES_FILE = "charts/dev/values.yaml"
+            def SERVICES_CHANGED = ""
 
             stage('Checkout source code repository') {
                 checkout([$class: 'GitSCM',
@@ -15,12 +16,52 @@ def runDevPipeline() {
                 ])
             }
 
+            stage('Detect changed services') {
+                def isShallow = sh(script: "git rev-parse --is-shallow-repository", returnStdout: true).trim()
+                if (isShallow == "true") {
+                    sh "git fetch origin ${env.BRANCH_NAME} --prune --unshallow"
+                } else {
+                    sh "git fetch origin ${env.BRANCH_NAME} --prune"
+                }
+
+                def baseCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
+                def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
+                echo "Raw changed files:\n${changes}"
+
+                def changedFiles = changes ? changes.split("\n") : []
+                def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
+
+                def services = [
+                    "spring-petclinic-admin-server",
+                    "spring-petclinic-api-gateway",
+                    "spring-petclinic-config-server",
+                    "spring-petclinic-customers-service",
+                    "spring-petclinic-discovery-server",
+                    "spring-petclinic-genai-service",
+                    "spring-petclinic-vets-service",
+                    "spring-petclinic-visits-service"
+                ]
+
+                def changedServices = services.findAll { service ->
+                    normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
+                }
+
+                SERVICES_CHANGED = changedServices.join(',')
+                echo "Changed services: ${SERVICES_CHANGED}"
+
+                if (!SERVICES_CHANGED) {
+                    echo "No services changed. Skipping build."
+                    return
+                }
+            }
+
             stage('Get commit hash') {
                 env.COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                 echo "Commit hash: ${env.COMMIT}"
             }
 
             stage('Build & Push docker images') {
+                def servicesList = SERVICES_CHANGED.tokenize(',')
                 def serviceMap = [
                     'config-server': '8888',
                     'discovery-server': '8761',
@@ -32,19 +73,21 @@ def runDevPipeline() {
                     'admin-server': '9090'
                 ]
 
-                // Sử dụng docker.withRegistry để đăng nhập Docker Hub
                 docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
-                    serviceMap.each { service, port ->
-                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${service}:dev-${env.COMMIT}"
-                        echo "Building Docker image for ${service} → ${imageName}"
+                    servicesList.each { service ->
+                        def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                        def port = serviceMap[shortServiceName]
+                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.COMMIT}"
+                        echo "Building Docker image for ${shortServiceName} → ${imageName}"
 
                         sh """
                             docker build \
-                              --build-arg SERVICE_NAME=${service} \
+                              --build-arg SERVICE_NAME=${shortServiceName} \
                               --build-arg EXPOSED_PORT=${port} \
                               -t ${imageName} .
+                            docker push ${imageName}
+                            docker rmi ${imageName} || true
                         """
-                        sh "docker push ${imageName}"
                     }
                 }
             }
@@ -67,25 +110,16 @@ def runDevPipeline() {
 
             stage('Update configuration with new image tags') {
                 dir('gitops-repo') {
-                    def tag = "dev-${env.COMMIT}"
-                    def services = [
-                        'config-server',
-                        'customers-service',
-                        'discovery-server',
-                        'visits-service',
-                        'vets-service',
-                        'genai-service',
-                        'api-gateway',
-                        'admin-server'
-                    ]
+                    def servicesList = SERVICES_CHANGED.tokenize(',')
 
-                    services.each { svc ->
+                    servicesList.each { service ->
+                        def shortServiceName = service.replaceFirst("spring-petclinic-", "")
                         sh """
-                            if grep -q "^[[:space:]]*${svc}:" ${VALUES_FILE}; then
-                                lineNumber=\$(grep -n "^[[:space:]]*${svc}:" ${VALUES_FILE} | cut -d':' -f1)
+                            if grep -q "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE}; then
+                                lineNumber=\$(grep -n "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE} | cut -d':' -f1)
                                 if [ ! -z "\$lineNumber" ]; then
                                     tagLine=\$((lineNumber + 3))
-                                    sed -i "\${tagLine}s/tag: .*/tag: ${tag}/" ${VALUES_FILE}
+                                    sed -i "\${tagLine}s/tag: .*/tag: ${env.COMMIT}/" ${VALUES_FILE}
                                 fi
                             fi
                         """
@@ -104,7 +138,7 @@ def runDevPipeline() {
                     )]) {
                         sh """
                             git add ${VALUES_FILE}
-                            git commit -m "Update image tags for services to dev-${env.COMMIT}" || echo "No changes to commit"
+                            git commit -m "Update image tags for services to ${env.COMMIT}" || echo "No changes to commit"
                             git push origin main
                         """
                     }
@@ -112,7 +146,7 @@ def runDevPipeline() {
             }
         } catch (Exception e) {
             echo "Error in dev pipeline: ${e.message}"
-            throw e // Ném lỗi để pipeline đánh dấu thất bại
+            throw e
         } finally {
             cleanWs()
             echo "Dev pipeline completed"
