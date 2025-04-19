@@ -36,30 +36,48 @@ def runStagingPipeline() {
                         echo "No tag provided. Detecting changed services for main branch."
                         sh "git fetch origin main --prune --depth=2 || git fetch origin main --prune --unshallow"
 
-                        def baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
-                        def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
-                        echo "Raw changed files:\n${changes}"
-
-                        def changedFiles = changes ? changes.split("\n") : []
-                        def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
-
-                        def services = [
-                            "spring-petclinic-admin-server",
-                            "spring-petclinic-api-gateway",
-                            "spring-petclinic-config-server",
-                            "spring-petclinic-customers-service",
-                            "spring-petclinic-discovery-server",
-                            "spring-petclinic-genai-service",
-                            "spring-petclinic-vets-service",
-                            "spring-petclinic-visits-service"
-                        ]
-
-                        def changedServices = services.findAll { service ->
-                            normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
+                        def baseCommit
+                        try {
+                            baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
+                        } catch (Exception e) {
+                            echo "No previous commit found. Treating as first commit."
+                            SERVICES_CHANGED = [
+                                "spring-petclinic-config-server",
+                                "spring-petclinic-discovery-server",
+                                "spring-petclinic-customers-service",
+                                "spring-petclinic-visits-service",
+                                "spring-petclinic-vets-service",
+                                "spring-petclinic-genai-service",
+                                "spring-petclinic-api-gateway",
+                                "spring-petclinic-admin-server"
+                            ].join(',')
                         }
 
-                        SERVICES_CHANGED = changedServices.join(',')
-                        echo "Changed services: ${SERVICES_CHANGED}"
+                        if (!SERVICES_CHANGED) {
+                            def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
+                            echo "Raw changed files:\n${changes}"
+
+                            def changedFiles = changes ? changes.split("\n") : []
+                            def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
+
+                            def services = [
+                                "spring-petclinic-admin-server",
+                                "spring-petclinic-api-gateway",
+                                "spring-petclinic-config-server",
+                                "spring-petclinic-customers-service",
+                                "spring-petclinic-discovery-server",
+                                "spring-petclinic-genai-service",
+                                "spring-petclinic-vets-service",
+                                "spring-petclinic-visits-service"
+                            ]
+
+                            def changedServices = services.findAll { service ->
+                                normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
+                            }
+
+                            SERVICES_CHANGED = changedServices.join(',')
+                            echo "Changed services: ${SERVICES_CHANGED}"
+                        }
 
                         if (!SERVICES_CHANGED) {
                             echo "No services changed. Skipping build."
