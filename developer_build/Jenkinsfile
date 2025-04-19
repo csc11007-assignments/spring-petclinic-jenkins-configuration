@@ -135,13 +135,32 @@ pipeline {
                 }
             }
         }
-    stage('Show access information') {
+
+        stage('Schedule automatic deletion') {
+            steps {
+                script {
+                    def HOURS_TO_LIVE = 1 // Set how many hours the environment should live
+                    def deletionTimestamp = new Date().getTime() + (HOURS_TO_LIVE * 60 * 60 * 1000)
+                    
+                    // Schedule the deletion job
+                    build job: 'delete-deployment', 
+                          parameters: [string(name: 'BUILD_NUMBER_TO_DELETE', value: "${env.BUILD_NUMBER}")],
+                          quietPeriod: HOURS_TO_LIVE * 60 * 60,
+                          wait: false
+                          
+                    echo "Environment will be automatically deleted after ${HOURS_TO_LIVE} hours"
+                    echo "Scheduled deletion time: ${new Date(deletionTimestamp)}"
+                }
+            }
+        }
+
+        stage('Show access information') {
             steps {
                 echo "Current build: ${env.BUILD_URL}"
                 echo "Main application: http://petclinic-${NAMESPACE}.com"
                 echo "Eureka Dashboard: http://eureka.petclinic-${NAMESPACE}.com"
                 echo "Admin Server: http://admin.petclinic-${NAMESPACE}.com"
-                echo "Delete deployment: ${env.JENKINS_URL}job/delete-deployment/buildWithParameters?BUILD_NUMBER_TO_DELETE=${env.BUILD_NUMBER}"
+                echo "Delete deployment manually: ${env.JENKINS_URL}job/delete-deployment/buildWithParameters?BUILD_NUMBER_TO_DELETE=${env.BUILD_NUMBER}"
             }
         }
     }
