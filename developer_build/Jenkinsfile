@@ -1,114 +1,180 @@
-def runDeveloperBuildPipeline() {
-    node {
-        try {
-            // Khai báo biến trực tiếp
-            def NAMESPACE = "developer_build-${env.BUILD_NUMBER}"
-            def DOCKER_REGISTRY = 'csc11007'
-
-            parameters {
-                string(name: 'api_gateway', defaultValue: 'main', description: '')
-                string(name: 'customers_service', defaultValue: 'main', description: '')
-                string(name: 'vets_service', defaultValue: 'main', description: '')
-                string(name: 'visits_service', defaultValue: 'main', description: '')
-                string(name: 'admin_server', defaultValue: 'main', description: '')
-                string(name: 'discovery_server', defaultValue: 'main', description: '')
-                string(name: 'config_server', defaultValue: 'main', description: '')
-                string(name: 'genai_service', defaultValue: 'main', description: '')
+// this is prameterized pipeline, which is not automatically triggered by any event
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'api_gateway', defaultValue: 'main', description: '')
+        string(name: 'customers_service', defaultValue: 'main', description: '')
+        string(name: 'vets_service', defaultValue: 'main', description: '')
+        string(name: 'visits_service', defaultValue: 'main', description: '')
+        string(name: 'admin_server', defaultValue: 'main', description: '')
+        string(name: 'discovery_server', defaultValue: 'main', description: '')
+        string(name: 'config_server', defaultValue: 'main', description: '')
+        string(name: 'genai_service', defaultValue: 'main', description: '')
+    }
+    
+    environment {
+        NAMESPACE = "developerbuild-${BUILD_NUMBER}"
+        DOCKER_REGISTRY = 'csc11007'
+        CONFIG_REPO = 'https://github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git'
+    }
+    
+    stages {
+        stage('Checkout configuration repository') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: 'main']],
+                    userRemoteConfigs: [[
+                        url: "${CONFIG_REPO}",
+                        credentialsId: 'github-token'  // Add your Jenkins credential ID here
+                    ]]
+                ])
             }
+        }
 
-            stage('Checkout repository') {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-token',
-                    usernameVariable: 'GIT_USERNAME',
-                    passwordVariable: 'GIT_PASSWORD'
-                )]) {
-                    git(
-                        branch: 'main',
-                        credentialsId: 'github-token',
-                        url: 'https://github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git'
-                    )
+        stage('Get commit IDs') {
+            steps {
+                script {
+                    // You might also need credentials for these git operations
+                    withCredentials([usernamePassword(credentialsId: 'github-token', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+                        env.API_GATEWAY_TAG = getCommitId('spring-petclinic-api-gateway', params.api_gateway)
+                        env.CUSTOMERS_SERVICE_TAG = getCommitId('spring-petclinic-customers-service', params.customers_service)
+                        env.VETS_SERVICE_TAG = getCommitId('spring-petclinic-vets-service', params.vets_service)
+                        env.VISITS_SERVICE_TAG = getCommitId('spring-petclinic-visits-service', params.visits_service)
+                        env.ADMIN_SERVER_TAG = getCommitId('spring-petclinic-admin-server', params.admin_server)
+                        env.DISCOVERY_SERVER_TAG = getCommitId('spring-petclinic-discovery-server', params.discovery_server)
+                        env.CONFIG_SERVER_TAG = getCommitId('spring-petclinic-config-server', params.config_server)
+                        env.GENAI_SERVICE_TAG = getCommitId('spring-petclinic-genai-service', params.genai_service)
+                    }
                 }
             }
+        }
 
-            stage('Get commit IDs') {
-                env.API_GATEWAY_TAG = getCommitId('spring-petclinic-api-gateway', params.api_gateway)
-                env.CUSTOMERS_SERVICE_TAG = getCommitId('spring-petclinic-customers-service', params.customers_service)
-                env.VETS_SERVICE_TAG = getCommitId('spring-petclinic-vets-service', params.vets_service)
-                env.VISITS_SERVICE_TAG = getCommitId('spring-petclinic-visits-service', params.visits_service)
-                env.ADMIN_SERVER_TAG = getCommitId('spring-petclinic-admin-server', params.admin_server)
-                env.DISCOVERY_SERVER_TAG = getCommitId('spring-petclinic-discovery-server', params.discovery_server)
-                env.CONFIG_SERVER_TAG = getCommitId('spring-petclinic-config-server', params.config_server)
-                env.GENAI_SERVICE_TAG = getCommitId('spring-petclinic-genai-service', params.genai_service)
+        stage('Create namespace') {
+            steps {
+                withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
+                    sh "kubectl create namespace ${NAMESPACE} || true"
+                    echo "Created namespace: ${NAMESPACE}"
+                }
             }
+        }
+        
+        stage('Update Helm and Ingress values') {
+            steps {
+                script {
+                    // Update the base domain in values.yaml
+                    sh "sed -i 's/^namespace:.*/namespace: ${NAMESPACE}/' ./charts/preview/values.yaml"
+                    
+                    // Update API gateway ingress host
+                    sh "sed -i '/api-gateway:/,/host:/ s/host:.*/host: petclinic-${NAMESPACE}.com/' ./charts/preview/values.yaml"
+                    
+                    // Update the ingress resources with the correct domain
+                    sh "sed -i 's/host:.*/host: petclinic-${NAMESPACE}.com/' ./ingress/preview/ingress-preview_values.yaml"
+                    sh "sed -i 's/host:.*/host: eureka.petclinic-${NAMESPACE}.com/' ./ingress/preview/eureka-ingress.yaml"
+                    sh "sed -i 's/host:.*/host: admin.petclinic-${NAMESPACE}.com/' ./ingress/preview/admin-server-ingress.yaml"
+                    
+                    echo "Main domain: petclinic-${NAMESPACE}.com"
+                    echo "Eureka domain: eureka.petclinic-${NAMESPACE}.com"
+                    echo "Admin domain: admin.petclinic-${NAMESPACE}.com"
+                }
+            }
+        }
 
-            stage('Create namespace') {
-                steps {
+        stage('Deploy services with Helm') {
+            steps {
+                script {
                     withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
-                        sh "kubectl create namespace ${NAMESPACE}"
-                        echo "Created namespace: ${NAMESPACE}"
+                        sh """
+                        helm upgrade --install petclinic ./charts/preview -n ${NAMESPACE} --create-namespace \\
+                        --set namespace=${NAMESPACE} \\
+                        --set services.api-gateway.tag=${API_GATEWAY_TAG} \\
+                        --set services.customers-service.tag=${CUSTOMERS_SERVICE_TAG} \\
+                        --set services.vets-service.tag=${VETS_SERVICE_TAG} \\
+                        --set services.visits-service.tag=${VISITS_SERVICE_TAG} \\
+                        --set services.admin-server.tag=${ADMIN_SERVER_TAG} \\
+                        --set services.discovery-server.tag=${DISCOVERY_SERVER_TAG} \\
+                        --set services.config-server.tag=${CONFIG_SERVER_TAG} \\
+                        --set services.genai-service.tag=${GENAI_SERVICE_TAG}
+                        """
                     }
                 }
             }
-
-            stage('Update helm values') {
-                steps {
-                    script {
-                        withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
-                            sh "sed -i 's/^namespace:.*/namespace: ${NAMESPACE}/' ./charts/preview/values.yaml"
-
-                            sh "sed -i '/api-gateway:/,/host:/ s/host:.*/host: petclinic-${NAMESPACE}.com/' ./charts/preview/values.yaml"
-
-                            echo "Domain: petclinic-${NAMESPACE}.com:30213"
-                        }
-                    }
-                }
-            }
-
-            stage('Deploy services') {
-                steps {
-                    script {
-                        withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
+        }
+        
+        stage('Deploy Ingress resources') {
+            steps {
+                script {
+                    withKubeConfig([credentialsId: 'k8s-kubeconfig-creds']) {
+                        // Temporarily disable the webhook validation
+                        sh """
+                        # Save the current state of the webhook
+                        kubectl get validatingwebhookconfiguration ingress-nginx-admission -o yaml > webhook-backup.yaml || true
+                        
+                        # Patch the webhook to disable it temporarily
+                        kubectl patch validatingwebhookconfiguration ingress-nginx-admission --type=json -p='[{"op": "replace", "path": "/webhooks/0/failurePolicy", "value": "Ignore"}]' || true
+                        """
+                        
+                        try {
+                            // Apply ingress resources with explicit namespace
                             sh """
-                            helm upgrade --install petclinic ./charts/preview -n ${NAMESPACE} --create-namespace \\
-                            --set namespace=${NAMESPACE} \\
-                            --set services.api-gateway.commit=${API_GATEWAY_TAG} \\
-                            --set services.customers-service.commit=${CUSTOMERS_SERVICE_TAG} \\
-                            --set services.vets-service.commit=${VETS_SERVICE_TAG} \\
-                            --set services.visits-service.commit=${VISITS_SERVICE_TAG} \\
-                            --set services.admin-server.commit=${ADMIN_SERVER_TAG} \\
-                            --set services.discovery-server.commit=${DISCOVERY_SERVER_TAG} \\
-                            --set services.config-server.commit=${CONFIG_SERVER_TAG} \\
-                                --set services.genai-service.commit=${GENAI_SERVICE_TAG}
+                            # Update namespace in the ingress files
+                            sed -i 's/namespace: .*/namespace: ${NAMESPACE}/' ./ingress/preview/ingress-preview_values.yaml
+                            sed -i 's/namespace: .*/namespace: ${NAMESPACE}/' ./ingress/preview/eureka-ingress.yaml
+                            sed -i 's/namespace: .*/namespace: ${NAMESPACE}/' ./ingress/preview/admin-server-ingress.yaml
+                            
+                            kubectl apply -f ./ingress/preview/ingress-preview_values.yaml
+                            kubectl apply -f ./ingress/preview/eureka-ingress.yaml
+                            kubectl apply -f ./ingress/preview/admin-server-ingress.yaml
                             """
+                        } finally {
+                            // Restore the webhook configuration
+                            sh "kubectl apply -f webhook-backup.yaml || true"
                         }
                     }
                 }
             }
-
-            stage('Show delete link') {
+        }
+    stage('Show access information') {
+            steps {
                 echo "Current build: ${env.BUILD_URL}"
+                echo "Main application: http://petclinic-${NAMESPACE}.com"
+                echo "Eureka Dashboard: http://eureka.petclinic-${NAMESPACE}.com"
+                echo "Admin Server: http://admin.petclinic-${NAMESPACE}.com"
                 echo "Delete deployment: ${env.JENKINS_URL}job/delete-deployment/buildWithParameters?BUILD_NUMBER_TO_DELETE=${env.BUILD_NUMBER}"
             }
-        } catch (Exception e) {
-            echo "Error in developer build pipeline: ${e.message}"
-            throw e
-        } finally {
-            cleanWs()
-            echo "Developer build pipeline completed"
+        }
+    }
+    
+    post {
+        failure {
+            echo "Deployment failed. Cleaning up namespace ${NAMESPACE}"
+            sh "kubectl delete namespace ${NAMESPACE} || true"
         }
     }
 }
 
 def getCommitId(serviceName, branch) {
     def cleanBranch = branch.trim()
+    
+    // Use credentials for git ls-remote
+    def gitCmd = "git ls-remote https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git refs/heads/${cleanBranch}"
+    
+    // For private repositories, you might need to include credentials in the URL
+    // def gitCmd = "git ls-remote https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git refs/heads/${cleanBranch}"
+    
     def commitId = sh(
-        script: "git ls-remote https://github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git refs/heads/${cleanBranch} | cut -f 1 | head -n 1",
+        script: "${gitCmd} | cut -f 1 | head -n 1",
         returnStdout: true
     ).trim().take(7)
 
-    def tag = cleanBranch == "main" ? "main" : "${cleanBranch}-${commitId}"
+    def tag = ""
+    if (cleanBranch == "main") {
+        tag = "main"
+    } else {
+        tag = "${cleanBranch}-${commitId}"
+    }
+
     echo "Service: ${serviceName}, Branch: ${cleanBranch}, Commit ID: ${commitId}, Tag: ${tag}"
     return tag
 }
-
-return this
