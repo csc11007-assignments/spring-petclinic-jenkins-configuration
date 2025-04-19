@@ -34,7 +34,6 @@ def runStagingPipeline() {
                         ].join(',')
                     } else {
                         echo "No tag provided. Detecting changed services for main branch."
-                        // Fetch enough history for HEAD~1
                         sh "git fetch origin main --prune --depth=2 || git fetch origin main --prune --unshallow"
 
                         def baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
@@ -109,7 +108,7 @@ def runStagingPipeline() {
             }
 
             stage('Checkout GitOps Configuration Repository') {
-                when { expression { SERVICES_CHANGED != "" } }
+                when { expression { SERVICES_CHANGED != "" && GIT_TAG } }
                 dir('gitops-repo') {
                     withCredentials([usernamePassword(
                         credentialsId: 'github-token',
@@ -127,7 +126,7 @@ def runStagingPipeline() {
             }
 
             stage('Update Configuration with New Image Tags') {
-                when { expression { SERVICES_CHANGED != "" } }
+                when { expression { SERVICES_CHANGED != "" && GIT_TAG } }
                 dir('gitops-repo') {
                     script {
                         def servicesList = SERVICES_CHANGED.tokenize(',')
@@ -151,7 +150,7 @@ def runStagingPipeline() {
             }
 
             stage('Commit and Push to GitOps Repository') {
-                when { expression { SERVICES_CHANGED != "" } }
+                when { expression { SERVICES_CHANGED != "" && GIT_TAG } }
                 dir('gitops-repo') {
                     withCredentials([usernamePassword(
                         credentialsId: 'github-token',
