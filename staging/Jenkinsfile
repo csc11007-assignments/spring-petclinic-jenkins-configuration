@@ -88,98 +88,98 @@ def runStagingPipeline() {
                 }
             }
 
-            stage('Build & Push Docker Images') {
-                when { expression { SERVICES_CHANGED != "" } }
-                script {
-                    def servicesList = SERVICES_CHANGED.tokenize(',')
-                    def serviceMap = [
-                        'spring-petclinic-config-server': '8888',
-                        'spring-petclinic-discovery-server': '8761',
-                        'spring-petclinic-customers-service': '8081',
-                        'spring-petclinic-visits-service': '8082',
-                        'spring-petclinic-vets-service': '8083',
-                        'spring-petclinic-genai-service': '8084',
-                        'spring-petclinic-api-gateway': '8080',
-                        'spring-petclinic-admin-server': '9090'
-                    ]
-
-                    docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
-                        servicesList.each { service ->
-                            def shortServiceName = service.replaceFirst("spring-petclinic-", "")
-                            def port = serviceMap[service]
-                            def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.TAG}"
-                            echo "Building Docker image for ${shortServiceName} → ${imageName}"
-
-                            sh """
-                                docker build \
-                                  --build-arg SERVICE_NAME=${service} \
-                                  --build-arg EXPOSED_PORT=${port} \
-                                  -t ${imageName} .
-                                docker push ${imageName}
-                                docker rmi ${imageName} || true
-                                docker system prune -f --volumes
-                                docker builder prune -f
-                            """
-                        }
-                    }
-                }
-            }
-
-            stage('Checkout GitOps Configuration Repository') {
-                when { expression { SERVICES_CHANGED != "" && GIT_TAG } }
-                dir('gitops-repo') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'github-token',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_PASSWORD'
-                    )]) {
-                        sh """
-                            rm -rf ./*
-                            git clone https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git .
-                            git config user.email "jenkins@example.com"
-                            git config user.name "Jenkins CI"
-                        """
-                    }
-                }
-            }
-
-            stage('Update Configuration with New Image Tags') {
-                when { expression { SERVICES_CHANGED != "" && GIT_TAG } }
-                dir('gitops-repo') {
+            if (SERVICES_CHANGED) {
+                stage('Build & Push Docker Images') {
                     script {
-                        def servicesList = SERVICES_CHANGED.tokenize(',')
+                        def servicesList = SERVICES Changed.tokenize(',')
+                        def serviceMap = [
+                            'spring-petclinic-config-server': '8888',
+                            'spring-petclinic-discovery-server': '8761',
+                            'spring-petclinic-customers-service': '8081',
+                            'spring-petclinic-visits-service': '8082',
+                            'spring-petclinic-vets-service': '8083',
+                            'spring-petclinic-genai-service': '8084',
+                            'spring-petclinic-api-gateway': '8080',
+                            'spring-petclinic-admin-server': '9090'
+                        ]
 
-                        servicesList.each { service ->
-                            def shortServiceName = service.replaceFirst("spring-petclinic-", "")
-                            sh """
-                                if grep -q "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE}; then
-                                    lineNumber=\$(grep -n "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE} | cut -d':' -f1)
-                                    if [ ! -z "\$lineNumber" ]; then
-                                        tagLine=\$((lineNumber + 3))
-                                        sed -i "\${tagLine}s/tag: .*/tag: ${env.TAG}/" ${VALUES_FILE}
-                                    fi
-                                fi
-                            """
+                        docker.withRegistry('https://index.docker.io/v1/', 'csc11007') {
+                            servicesList.each { service ->
+                                def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                                def port = serviceMap[service]
+                                def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.TAG}"
+                                echo "Building Docker image for ${shortServiceName} → ${imageName}"
+
+                                sh """
+                                    docker build \
+                                      --build-arg SERVICE_NAME=${service} \
+                                      --build-arg EXPOSED_PORT=${port} \
+                                      -t ${imageName} .
+                                    docker push ${imageName}
+                                    docker rmi ${imageName} || true
+                                    docker system prune -f --volumes
+                                    docker builder prune -f
+                                """
+                            }
                         }
-
-                        sh "cat ${VALUES_FILE}"
                     }
                 }
             }
 
-            stage('Commit and Push to GitOps Repository') {
-                when { expression { SERVICES_CHANGED != "" && GIT_TAG } }
-                dir('gitops-repo') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'github-token',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_PASSWORD'
-                    )]) {
-                        sh """
-                            git add ${VALUES_FILE}
-                            git commit -m "Update image tags for services [${SERVICES_CHANGED}] to ${env.TAG} in ${VALUES_FILE}" || echo "No changes to commit"
-                            git push origin main
-                        """
+            if (SERVICES_CHANGED && GIT_TAG) {
+                stage('Checkout GitOps Configuration Repository') {
+                    dir('gitops-repo') {
+                        withCredentials([usernamePassword(
+                            credentialsId: 'github-token',
+                            usernameVariable: 'GIT_USERNAME',
+                            passwordVariable: 'GIT_PASSWORD'
+                        )]) {
+                            sh """
+                                rm -rf ./*
+                                git clone https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/csc11007-assignments/spring-pet-clinic-microservices-configuration.git .
+                                git config user.email "jenkins@example.com"
+                                git config user.name "Jenkins CI"
+                            """
+                        }
+                    }
+                }
+
+                stage('Update Configuration with New Image Tags') {
+                    dir('gitops-repo') {
+                        script {
+                            def servicesList = SERVICES_CHANGED.tokenize(',')
+
+                            servicesList.each { service ->
+                                def shortServiceName = service.replaceFirst("spring-petclinic-", "")
+                                sh """
+                                    if grep -q "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE}; then
+                                        lineNumber=\$(grep -n "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE} | cut -d':' -f1)
+                                        if [ ! -z "\$lineNumber" ]; then
+                                            tagLine=\$((lineNumber + 3))
+                                            sed -i "\${tagLine}s/tag: .*/tag: ${env.TAG}/" ${VALUES_FILE}
+                                        fi
+                                    fi
+                                """
+                            }
+
+                            sh "cat ${VALUES_FILE}"
+                        }
+                    }
+                }
+
+                stage('Commit and Push to GitOps Repository') {
+                    dir('gitops-repo') {
+                        withCredentials([usernamePassword(
+                            credentialsId: 'github-token',
+                            usernameVariable: 'GIT_USERNAME',
+                            passwordVariable: 'GIT_PASSWORD'
+                        )]) {
+                            sh """
+                                git add ${VALUES_FILE}
+                                git commit -m "Update image tags for services [${SERVICES_CHANGED}] to ${env.TAG} in ${VALUES_FILE}" || echo "No changes to commit"
+                                git push origin main
+                            """
+                        }
                     }
                 }
             }
