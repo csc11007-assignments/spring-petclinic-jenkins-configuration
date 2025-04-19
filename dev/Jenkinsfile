@@ -15,45 +15,60 @@ def runDevPipeline() {
                 ])
             }
 
-            stage('Detect changed services') {
-                def isShallow = sh(script: "git rev-parse --is-shallow-repository", returnStdout: true).trim()
-                if (isShallow == "true") {
-                    sh "git fetch origin ${env.BRANCH_NAME} --prune --unshallow"
-                } else {
-                    sh "git fetch origin ${env.BRANCH_NAME} --prune"
-                }
+            stage('Detect Changed Services') {
+                script {
+                    sh "git fetch origin ${env.BRANCH_NAME} --prune --depth=2 || git fetch origin ${env.BRANCH_NAME} --prune --unshallow"
 
-                def baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
-                def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
-                echo "Changed files between ${baseCommit} and HEAD:\n${changes}"
+                    def baseCommit
+                    try {
+                        baseCommit = sh(script: "git rev-parse HEAD~1", returnStdout: true).trim()
+                    } catch (Exception e) {
+                        echo "No previous commit found. Treating as first commit."
+                        SERVICES_CHANGED = [
+                            "spring-petclinic-admin-server",
+                            "spring-petclinic-api-gateway",
+                            "spring-petclinic-config-server",
+                            "spring-petclinic-customers-service",
+                            "spring-petclinic-discovery-server",
+                            "spring-petclinic-genai-service",
+                            "spring-petclinic-vets-service",
+                            "spring-petclinic-visits-service"
+                        ].join(',')
+                    }
 
-                def changedFiles = changes ? changes.split("\n") : []
-                def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
+                    if (!SERVICES_CHANGED) {
+                        def changes = sh(script: "git diff --name-only ${baseCommit} HEAD", returnStdout: true).trim()
+                        echo "Raw changed files:\n${changes}"
 
-                def services = [
-                    "spring-petclinic-admin-server",
-                    "spring-petclinic-api-gateway",
-                    "spring-petclinic-config-server",
-                    "spring-petclinic-customers-service",
-                    "spring-petclinic-discovery-server",
-                    "spring-petclinic-genai-service",
-                    "spring-petclinic-vets-service",
-                    "spring-petclinic-visits-service"
-                ]
+                        def changedFiles = changes ? changes.split("\n") : []
+                        def normalizedChanges = changedFiles.collect { file -> file.replaceFirst("^.*?/spring-petclinic-microservices/", "") }
 
-                def changedServices = services.findAll { service ->
-                    normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
-                }
+                        def services = [
+                            "spring-petclinic-admin-server",
+                            "spring-petclinic-api-gateway",
+                            "spring-petclinic-config-server",
+                            "spring-petclinic-customers-service",
+                            "spring-petclinic-discovery-server",
+                            "spring-petclinic-genai-service",
+                            "spring-petclinic-vets-service",
+                            "spring-petclinic-visits-service"
+                        ]
 
-                SERVICES_CHANGED = changedServices.join(',')
-                echo "Changed services: ${SERVICES_CHANGED}"
+                        def changedServices = services.findAll { service ->
+                            normalizedChanges.any { file -> file.startsWith("${service}/") || file.contains("${service}/") }
+                        }
 
-                if (!SERVICES_CHANGED) {
-                    echo "No services changed. Skipping build."
-                    return
+                        SERVICES_CHANGED = changedServices.join(',')
+                        echo "Changed services: ${SERVICES_CHANGED}"
+                    }
+
+                    if (!SERVICES_CHANGED) {
+                        echo "No services changed. Skipping build."
+                        currentBuild.result = 'SUCCESS'
+                        return
+                    }
                 }
             }
-
 
             stage('Get commit hash') {
                 env.COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
