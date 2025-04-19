@@ -8,6 +8,7 @@ def runStagingPipeline() {
             def VALUES_FILE = "charts/staging/values.yaml"
             def GIT_TAG = params.tag_name?.trim() ?: env.TAG_NAME?.trim()
             def SERVICES_CHANGED = ""
+            env.TAG = GIT_TAG ?: 'main'
 
             stage('Checkout source code repository') {
                 checkout([$class: 'GitSCM',
@@ -88,7 +89,7 @@ def runStagingPipeline() {
                     servicesList.each { service ->
                         def shortServiceName = service.replaceFirst("spring-petclinic-", "")
                         def port = serviceMap[service]
-                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${GIT_TAG ?: 'main'}"
+                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.TAG}"
                         echo "Building Docker image for ${shortServiceName} → ${imageName}"
 
                         sh """
@@ -121,7 +122,6 @@ def runStagingPipeline() {
 
             stage('Update configuration with new image tags') {
                 dir('gitops-repo') {
-                    def tag = GIT_TAG ?: 'main'
                     def servicesList = SERVICES_CHANGED.tokenize(',')
 
                     servicesList.each { service ->
@@ -131,7 +131,7 @@ def runStagingPipeline() {
                                 lineNumber=\$(grep -n "^[[:space:]]*${shortServiceName}:" ${VALUES_FILE} | cut -d':' -f1)
                                 if [ ! -z "\$lineNumber" ]; then
                                     tagLine=\$((lineNumber + 3))
-                                    sed -i "\${tagLine}s/tag: .*/tag: ${tag}/" ${VALUES_FILE}
+                                    sed -i "\${tagLine}s/tag: .*/tag: ${env.TAG}/" ${VALUES_FILE}
                                 fi
                             fi
                         """
@@ -150,7 +150,7 @@ def runStagingPipeline() {
                     )]) {
                         sh """
                             git add ${VALUES_FILE}
-                            git commit -m "Update image tags for services [${SERVICES_CHANGED}] to ${tag} in ${VALUES_FILE}" || echo "No changes to commit"
+                            git commit -m "Update image tags for services [${SERVICES_CHANGED}] to ${env.TAG} in ${VALUES_FILE}" || echo "No changes to commit"
                             git push origin main
                         """
                     }
