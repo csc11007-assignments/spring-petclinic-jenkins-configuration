@@ -89,14 +89,14 @@ def runStagingPipeline() {
                     servicesList.each { service ->
                         def shortServiceName = service.replaceFirst("spring-petclinic-", "")
                         def port = serviceMap[shortServiceName]
-                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${GIT_TAG ?: 'main'}"
+                        def imageName = "${DOCKER_REGISTRY}/spring-petclinic-${shortServiceName}:${env.COMMIT}"
                         echo "Building Docker image for ${shortServiceName} → ${imageName}"
 
                         sh """
                             docker build \
-                              --build-arg SERVICE_NAME=${shortServiceName} \
-                              --build-arg EXPOSED_PORT=${port} \
-                              -t ${imageName} .
+                            --build-arg SERVICE_NAME=${shortServiceName} \
+                            --build-arg EXPOSED_PORT=${port} \
+                            -t ${imageName} .
                             docker push ${imageName}
                             docker rmi ${imageName} || true
                         """
