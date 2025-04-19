@@ -91,7 +91,7 @@ def runStagingPipeline() {
             if (SERVICES_CHANGED) {
                 stage('Build & Push Docker Images') {
                     script {
-                        def servicesList = SERVICES Changed.tokenize(',')
+                        def servicesList = SERVICES_CHANGED.tokenize(',')
                         def serviceMap = [
                             'spring-petclinic-config-server': '8888',
                             'spring-petclinic-discovery-server': '8761',
