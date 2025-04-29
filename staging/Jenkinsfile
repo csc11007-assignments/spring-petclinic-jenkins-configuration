@@ -22,6 +22,20 @@ def runStagingPipeline() {
                 script {
                     if (GIT_TAG) {
                         echo "Tag build detected: ${GIT_TAG}"
+                        stage('Create Release Candidate Branch') {
+                            withCredentials([usernamePassword(
+                                credentialsId: 'github-token',
+                                usernameVariable: 'GIT_USERNAME',
+                                passwordVariable: 'GIT_PASSWORD'
+                            )]) {
+                                sh """
+                                    git fetch origin
+                                    git checkout ${GIT_TAG}
+                                    git branch rc_${GIT_TAG} || echo "Branch rc_${GIT_TAG} already exists"
+                                    git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/csc11007-assignments/spring-petclinic-microservice-ex2.git rc_${GIT_TAG} || echo "Branch rc_${GIT_TAG} already pushed"
+                                """
+                            }
+                        }
                         SERVICES_CHANGED = [
                             "spring-petclinic-config-server",
                             "spring-petclinic-discovery-server",
